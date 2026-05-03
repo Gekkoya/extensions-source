@@ -1,0 +1,7 @@
+[build]
+# Target por defecto para compilación
+target = "wasm32-wasip1"
+
+# Configuración específica para wasm32-wasip1
+[target.wasm32-wasip1]
+rustflags = ["-C", "link-arg=-zstack-size=65536"]

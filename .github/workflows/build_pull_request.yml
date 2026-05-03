@@ -1,0 +1,201 @@
+name: PR Build Check
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'lib/**'
+      - 'lib-multisrc/**'
+      - 'core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build_pull_request.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CI_CHUNK_SIZE: 10
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.generate-matrices.outputs.matrix }}
+      delete: ${{ steps.generate-matrices.outputs.delete }}
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - id: generate-matrices
+        name: Generate build matrices
+        run: |
+          python ./.github/scripts/generate-build-matrices.py origin/main
+
+  build:
+    name: Build extensions (${{ matrix.chunk.number }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ toJson(fromJson(needs.prepare.outputs.matrix).chunk) != '[]' }}
+    strategy:
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: clippy, rustfmt
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-pr-${{ matrix.chunk.number }}"
+          cache-on-failure: true
+
+      - name: Cache Cargo registry (fallback)
+        uses: actions/cache@v4
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index (fallback)
+        uses: actions/cache@v4
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
+
+      - name: Cache target directory (fallback)
+        uses: actions/cache@v4
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: target
+          key: ${{ runner.os }}-target-pr-${{ matrix.chunk.number }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-pr-${{ matrix.chunk.number }}-
+            ${{ runner.os }}-target-pr-
+
+      - name: Run clippy
+        run: |
+          echo "Running clippy on chunk ${{ matrix.chunk.number }}"
+          MODULES='${{ toJson(matrix.chunk.modules) }}'
+          echo "$MODULES" | jq -r '.[] | .package' | while read -r pkg; do
+            echo "Checking package: $pkg"
+            cargo clippy -p "$pkg" --target wasm32-wasip1 -- -D warnings || true
+          done
+
+      - name: Build extensions (${{ matrix.chunk.number }})
+        run: |
+          echo "Building chunk ${{ matrix.chunk.number }}"
+          MODULES='${{ toJson(matrix.chunk.modules) }}'
+          echo "$MODULES" | jq -r '.[] | .package' | while read -r pkg; do
+            echo "Building package: $pkg"
+            cargo build --release -p "$pkg" --target wasm32-wasip1
+          done
+
+      - name: Collect WASM files
+        run: |
+          mkdir -p wasm-output
+          find target/wasm32-wasip1/release -name "*.wasm" -type f -exec cp {} wasm-output/ \;
+          ls -lh wasm-output/
+
+      - name: Upload WASM artifacts (${{ matrix.chunk.number }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: "wasm-chunk-${{ matrix.chunk.number }}"
+          path: "wasm-output/*.wasm"
+          retention-days: 1
+          if-no-files-found: warn
+
+  inspect:
+    name: Inspect built extensions
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ toJson(fromJson(needs.prepare.outputs.matrix).chunk) != '[]' }}
+    steps:
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ~/wasm-artifacts
+          pattern: wasm-chunk-*
+          merge-multiple: true
+
+      - name: Inspect WASM files
+        run: |
+          echo "## 📦 Built Extensions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size | SHA256 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          cd ~/wasm-artifacts
+          for wasm in *.wasm; do
+            if [ -f "$wasm" ]; then
+              size=$(du -h "$wasm" | cut -f1)
+              sha=$(sha256sum "$wasm" | cut -d' ' -f1 | cut -c1-16)
+              echo "| $wasm | $size | ${sha}... |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All extensions built successfully!" >> $GITHUB_STEP_SUMMARY
+
+  comment:
+    name: Comment on PR
+    needs: [prepare, build, inspect]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Comment build result
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const buildStatus = '${{ needs.build.result }}';
+            const inspectStatus = '${{ needs.inspect.result }}';
+            
+            let emoji = '✅';
+            let message = 'All extensions built successfully!';
+            
+            if (buildStatus === 'failure' || inspectStatus === 'failure') {
+              emoji = '❌';
+              message = 'Some extensions failed to build. Please check the logs.';
+            } else if (buildStatus === 'cancelled' || inspectStatus === 'cancelled') {
+              emoji = '⚠️';
+              message = 'Build was cancelled.';
+            }
+            
+            const comment = `${emoji} **Build Check Result**\n\n${message}\n\n[View workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

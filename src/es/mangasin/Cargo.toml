@@ -1,0 +1,17 @@
+[package]
+name = "mangasin"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gekkoya-core = { path = "../../../core" }
+gekkoya-lib = { path = "../../../lib" }
+mmrcms = { path = "../../../lib-multisrc/mmrcms" }
+wit-bindgen = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }

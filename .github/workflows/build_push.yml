@@ -1,0 +1,205 @@
+name: Build and Publish WASM Extensions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'lib/**'
+      - 'lib-multisrc/**'
+      - 'core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/scripts/**'
+      - '.github/workflows/build_push.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CI_CHUNK_SIZE: 10
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.generate-matrices.outputs.matrix }}
+      delete: ${{ steps.generate-matrices.outputs.delete }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Get last successful CI commit
+        uses: nrwl/nx-set-shas@v5
+        with:
+          fallback-sha: 4b825dc642cb6eb9a060e54bf8d69288fbee4904 # empty tree
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - id: generate-matrices
+        name: Generate build matrices
+        run: |
+          python ./.github/scripts/generate-build-matrices.py "$NX_BASE"
+
+  build:
+    name: Build extensions (${{ matrix.chunk.number }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ toJson(fromJson(needs.prepare.outputs.matrix).chunk) != '[]' }}
+    strategy:
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wasm-build-${{ matrix.chunk.number }}"
+          cache-on-failure: true
+
+      - name: Cache Cargo registry (fallback)
+        uses: actions/cache@v4
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index (fallback)
+        uses: actions/cache@v4
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
+
+      - name: Cache target directory (fallback)
+        uses: actions/cache@v4
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ matrix.chunk.number }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ matrix.chunk.number }}-
+            ${{ runner.os }}-target-
+
+      - name: Build extensions (${{ matrix.chunk.number }})
+        run: |
+          echo "Building chunk ${{ matrix.chunk.number }}"
+          MODULES='${{ toJson(matrix.chunk.modules) }}'
+          echo "$MODULES" | jq -r '.[] | .package' | while read -r pkg; do
+            echo "Building package: $pkg"
+            cargo build --release -p "$pkg" --target wasm32-wasip1
+          done
+
+      - name: Collect WASM files
+        run: |
+          mkdir -p wasm-output
+          find target/wasm32-wasip1/release -name "*.wasm" -type f -exec cp {} wasm-output/ \;
+          ls -lh wasm-output/
+
+      - name: Upload WASM artifacts (${{ matrix.chunk.number }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: "wasm-chunk-${{ matrix.chunk.number }}"
+          path: "wasm-output/*.wasm"
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 6
+
+  publish:
+    name: Publish extensions repository
+    needs: [prepare, build]
+    if: "github.repository == 'Gekkoya/extensions-source'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ~/wasm-artifacts
+          pattern: wasm-chunk-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: |
+          echo "Downloaded WASM files:"
+          find ~/wasm-artifacts -name "*.wasm" -type f
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Checkout main branch
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          path: main
+          persist-credentials: false
+
+      - name: Create repository artifacts
+        run: |
+          cd main
+          mkdir -p repo
+          python ./.github/scripts/move-built-wasm.py
+          python ./.github/scripts/create-repo.py
+
+      - name: Checkout extensions repository
+        uses: actions/checkout@v6
+        with:
+          repository: Gekkoya/extensions
+          token: ${{ secrets.BOT_PAT }}
+          ref: main
+          path: repo
+          persist-credentials: true
+
+      - name: Merge and deploy repository
+        env:
+          DELETE: ${{ needs.prepare.outputs.delete }}
+        run: |
+          cd repo
+          python ../main/.github/scripts/merge-repo.py "$DELETE"
+          chmod +x ../main/.github/scripts/commit-repo.sh
+          ../main/.github/scripts/commit-repo.sh
+
+      - name: Summary
+        run: |
+          echo "## 🎉 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Extensions built and published successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Published Extensions" >> $GITHUB_STEP_SUMMARY
+          cd repo
+          if [ -f index.json ]; then
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            jq '.extensions | length' index.json >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi

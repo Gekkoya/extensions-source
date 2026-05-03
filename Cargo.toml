@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "lib",
+    "lib-multisrc/mmrcms",
+    "src/es/mangasin"
+]
+
+default-members = [
+    "src/*/*"
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# WIT bindings
+wit-bindgen = "0.36"
+
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+
+# Crypto
+aes = "0.8"
+cbc = "0.1"
+cipher = "0.4"
+md-5 = { version = "0.10", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+# Error handling
+thiserror = { version = "2.0", default-features = false }
+
+# Utilities
+regex = { version = "1.11", default-features = false, features = ["std"] }
+synchrony-rs = "0.1"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations
+panic = "abort"     # Abort on panic
+strip = true        # Strip symbols from binary

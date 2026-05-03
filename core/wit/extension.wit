@@ -1,0 +1,280 @@
+package ikisaku:gekkoya-extension@0.1.0;
+
+/// Host tools that the app provides to the extension
+/// These are the "superpowers" the extension can use
+interface host-tools {
+    /// HTTP request configuration
+    record http-request {
+        /// URL to fetch
+        url: string,
+        /// HTTP method (GET, POST, etc)
+        method: string,
+        /// Custom headers as key-value pairs
+        headers: list<tuple<string, string>>,
+        /// Request body (optional)
+        body: option<string>,
+        /// Rate limit: minimum milliseconds between requests to this domain
+        rate-limit-millis: option<u64>,
+    }
+    
+    /// HTTP response
+    record http-response {
+        /// Response status code
+        status: u32,
+        /// Response headers
+        headers: list<tuple<string, string>>,
+        /// Response body
+        body: string,
+    }
+    
+    /// Fetch a URL with custom configuration
+    /// The host handles HTTP, applies rate limiting, etc.
+    /// The extension specifies ALL the details (headers, rate limits, etc)
+    /// 
+    /// # Parameters
+    /// - request: HTTP request configuration
+    /// 
+    /// # Returns
+    /// The HTTP response, or error message
+    fetch: func(request: http-request) -> result<http-response, string>;
+    
+    /// Evaluate JavaScript code and return the result
+    /// The host runs this in a JavaScript engine
+    /// 
+    /// # Parameters
+    /// - script: JavaScript code to evaluate
+    /// 
+    /// # Returns
+    /// The result as a string, or error message
+    evaluate-js: func(script: string) -> result<string, string>;
+}
+
+/// Core types used across the extension interface
+interface types {
+    /// Publication status of a manga
+    enum manga-status {
+        /// Status is unknown or not specified
+        unknown,
+        /// Manga is currently being published
+        ongoing,
+        /// Manga has been completed
+        completed,
+        /// Manga is licensed and not available
+        licensed,
+        /// Publishing has finished
+        publishing-finished,
+        /// Manga has been cancelled
+        cancelled,
+        /// Manga is on hiatus
+        on-hiatus,
+    }
+
+    /// Strategy for updating manga information
+    enum update-strategy {
+        /// Always check for updates
+        always-update,
+        /// Only fetch once and cache
+        only-fetch-once,
+    }
+
+    /// Represents a manga entry with all its metadata
+    record manga {
+        /// Relative URL path to the manga (e.g., "/manga/one-piece")
+        url: string,
+        /// Display title of the manga
+        title: string,
+        /// Artist name (optional)
+        artist: option<string>,
+        /// Author name (optional)
+        author: option<string>,
+        /// Synopsis or description (optional)
+        description: option<string>,
+        /// Comma-separated list of genres (optional)
+        genre: option<string>,
+        /// Publication status
+        status: manga-status,
+        /// URL to the cover/thumbnail image (optional)
+        thumbnail-url: option<string>,
+        /// Update strategy hint
+        update-strategy: update-strategy,
+        /// Whether the manga details have been fully initialized
+        initialized: bool,
+    }
+
+    /// Represents a chapter of a manga
+    record chapter {
+        /// Relative URL path to the chapter (e.g., "/manga/one-piece/chapter-1")
+        url: string,
+        /// Display name of the chapter
+        name: string,
+        /// Upload date as Unix timestamp (milliseconds since epoch)
+        date-upload: s64,
+        /// Chapter number (can be fractional for special chapters like 1.5)
+        chapter-number: f32,
+        /// Scanlation group name (optional)
+        scanlator: option<string>,
+    }
+
+    /// Represents a single page within a chapter
+    record page {
+        /// Zero-based index of the page
+        index: u32,
+        /// URL to fetch the page (may be used for additional processing)
+        url: string,
+        /// Direct URL to the image (optional, if already known)
+        image-url: option<string>,
+    }
+
+    /// Response containing a list of manga and pagination info
+    record manga-page {
+        /// List of manga entries
+        mangas: list<manga>,
+        /// Whether there are more pages available
+        has-next-page: bool,
+    }
+
+    /// Response containing a list of chapters
+    record chapter-list {
+        /// List of chapters
+        chapters: list<chapter>,
+    }
+
+    /// Response containing a list of pages
+    record page-list {
+        /// List of pages
+        pages: list<page>,
+    }
+
+    /// Filter definition for search/browse
+    record filter {
+        /// Type of filter: "text", "select", "checkbox", "sort", etc.
+        filter-type: string,
+        /// Display name of the filter
+        name: string,
+        /// Key used in query parameters
+        key: string,
+        /// Options for select-type filters (optional)
+        options: option<list<filter-option>>,
+    }
+
+    /// Option for select-type filters
+    record filter-option {
+        /// Display name
+        name: string,
+        /// Value to send in query
+        value: string,
+    }
+
+    /// Response containing available filters
+    record filter-list {
+        /// List of filters
+        filters: list<filter>,
+    }
+
+    /// Source metadata
+    record source-info {
+        /// Unique identifier for the source
+        id: u64,
+        /// Display name
+        name: string,
+        /// Language code (ISO 639-1)
+        lang: string,
+        /// Base URL of the source
+        base-url: string,
+        /// Whether the source supports latest updates
+        supports-latest: bool,
+    }
+}
+
+/// Main extension interface that all manga extensions must implement
+world extension {
+    /// Import host tools - these are provided by the app
+    import host-tools;
+    
+    /// Import the types interface
+    use types.{manga, chapter, page, manga-page, chapter-list, page-list, filter-list, source-info};
+
+    /// Get source metadata
+    /// Returns information about this extension source
+    export get-source-info: func() -> result<source-info, string>;
+
+    /// Get popular manga list
+    /// 
+    /// # Parameters
+    /// - page: Page number (1-indexed)
+    /// - body: HTML/JSON response body from the host (already fetched)
+    /// 
+    /// # Returns
+    /// Result containing manga list and pagination info, or error message
+    export get-popular: func(page: u32, body: string) -> result<manga-page, string>;
+
+    /// Get latest updates
+    /// 
+    /// # Parameters
+    /// - page: Page number (1-indexed)
+    /// - body: HTML/JSON response body from the host (already fetched)
+    /// 
+    /// # Returns
+    /// Result containing manga list and pagination info, or error message
+    export get-latest: func(page: u32, body: string) -> result<manga-page, string>;
+
+    /// Search for manga
+    /// 
+    /// # Parameters
+    /// - query: Search query string
+    /// - page: Page number (1-indexed)
+    /// - body: HTML/JSON response body from the host (already fetched)
+    /// 
+    /// # Returns
+    /// Result containing manga list and pagination info, or error message
+    export search: func(query: string, page: u32, body: string) -> result<manga-page, string>;
+
+    /// Get detailed manga information
+    /// 
+    /// # Parameters
+    /// - body: HTML/JSON response body from the host (already fetched)
+    /// 
+    /// # Returns
+    /// Result containing complete manga details, or error message
+    export get-manga-details: func(body: string) -> result<manga, string>;
+
+    /// Get chapter list for a manga
+    /// 
+    /// # Parameters
+    /// - body: HTML/JSON response body from the host (already fetched)
+    /// - manga-url: URL of the manga (for building chapter URLs)
+    /// 
+    /// # Returns
+    /// Result containing list of chapters, or error message
+    /// 
+    /// # Note
+    /// This function may call host-tools::fetch-url and host-tools::evaluate-js
+    /// to obtain the AES key if chapters are encrypted
+    export get-chapter-list: func(body: string, manga-url: string) -> result<chapter-list, string>;
+
+    /// Get page list for a chapter
+    /// 
+    /// # Parameters
+    /// - body: HTML/JSON response body from the host (already fetched)
+    /// 
+    /// # Returns
+    /// Result containing list of pages, or error message
+    export get-pages: func(body: string) -> result<page-list, string>;
+
+    /// Get available filters for search/browse
+    /// 
+    /// # Returns
+    /// Result containing list of filters, or error message
+    export get-filters: func() -> result<filter-list, string>;
+
+    /// Build URL for a given operation
+    /// This allows the extension to tell the host what URL to fetch
+    /// 
+    /// # Parameters
+    /// - operation: Type of operation ("popular", "latest", "search", "manga", "chapter")
+    /// - params: JSON string with operation-specific parameters
+    /// 
+    /// # Returns
+    /// Result containing the URL to fetch, or error message
+    export build-url: func(operation: string, params: string) -> result<string, string>;
+}
