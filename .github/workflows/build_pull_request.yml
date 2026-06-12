@@ -22,6 +22,8 @@ concurrency:
 env:
   CI_CHUNK_SIZE: 10
   CARGO_TERM_COLOR: always
+  WASM_TOOLS_VERSION: 1.248.0
+  WASMTIME_VERSION: 45.0.1
 
 jobs:
   prepare:
@@ -102,6 +104,9 @@ jobs:
             ${{ runner.os }}-target-pr-${{ matrix.chunk.number }}-
             ${{ runner.os }}-target-pr-
 
+      - name: Install wasm-tools
+        run: cargo install wasm-tools --locked --version "$WASM_TOOLS_VERSION"
+
       - name: Run clippy
         run: |
           echo "Running clippy on chunk ${{ matrix.chunk.number }}"
@@ -123,7 +128,16 @@ jobs:
       - name: Collect WASM files
         run: |
           mkdir -p wasm-output
-          find target/wasm32-wasip1/release -name "*.wasm" -type f -exec cp {} wasm-output/ \;
+          curl -fsSL \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasi_snapshot_preview1.reactor.wasm" \
+            -o wasi_snapshot_preview1.reactor.wasm
+          find target/wasm32-wasip1/release -maxdepth 1 -name "*.wasm" -type f | while read -r wasm; do
+            name="$(basename "$wasm")"
+            wasm-tools component new "$wasm" \
+              --adapt wasi_snapshot_preview1.reactor.wasm \
+              -o "wasm-output/$name"
+            wasm-tools validate "wasm-output/$name"
+          done
           ls -lh wasm-output/
 
       - name: Upload WASM artifacts (${{ matrix.chunk.number }})

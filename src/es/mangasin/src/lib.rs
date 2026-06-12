@@ -13,8 +13,8 @@ wit_bindgen::generate!({
     path: "../../../core/wit",
 });
 
-// The bindings are generated under ikisaku::gekkoya_extension
-use ikisaku::gekkoya_extension::{host_tools, types};
+// The bindings are generated under ikisaku::extension.
+use ikisaku::extension::{host_tools, types};
 
 // Conversion helpers between mmrcms types and WIT types
 fn convert_manga_status(status: mmrcms::MangaStatus) -> types::MangaStatus {

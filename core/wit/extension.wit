@@ -1,4 +1,4 @@
-package ikisaku:gekkoya-extension@0.1.0;
+package ikisaku:extension@0.1.0;
 
 /// Host tools that the app provides to the extension
 /// These are the "superpowers" the extension can use
