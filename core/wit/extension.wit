@@ -38,15 +38,6 @@ interface host-tools {
     /// The HTTP response, or error message
     fetch: func(request: http-request) -> result<http-response, string>;
     
-    /// Evaluate JavaScript code and return the result
-    /// The host runs this in a JavaScript engine
-    /// 
-    /// # Parameters
-    /// - script: JavaScript code to evaluate
-    /// 
-    /// # Returns
-    /// The result as a string, or error message
-    evaluate-js: func(script: string) -> result<string, string>;
 }
 
 /// Core types used across the extension interface
@@ -248,8 +239,8 @@ world extension {
     /// Result containing list of chapters, or error message
     /// 
     /// # Note
-    /// This function may call host-tools::fetch-url and host-tools::evaluate-js
-    /// to obtain the AES key if chapters are encrypted
+    /// This function may call host-tools::fetch to obtain assets required by
+    /// source-specific decryption if chapters are encrypted.
     export get-chapter-list: func(body: string, manga-url: string) -> result<chapter-list, string>;
 
     /// Get page list for a chapter

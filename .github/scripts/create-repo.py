@@ -7,12 +7,14 @@ Genera IDs automáticamente usando SHA256 del nombre + lang.
 
 import json
 import hashlib
+import os
 from pathlib import Path
 import re
 
 REPO_DIR = Path("repo")
 REPO_WASM_DIR = REPO_DIR / "wasm"
 REPO_ICON_DIR = REPO_DIR / "icon"
+REPO_BASE_URL = os.getenv("REPO_BASE_URL", "").rstrip("/")
 
 
 def calculate_sha256(file_path: Path) -> str:
@@ -39,6 +41,27 @@ def generate_source_id(name: str, lang: str) -> int:
     
     # Asegura que sea positivo (bit de signo en 0)
     return id_value & 0x7FFFFFFFFFFFFFFF
+
+
+def version_code(version: str) -> int:
+    parts = []
+    for part in version.split(".")[:3]:
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    value = 0
+    for part in parts:
+        value = value * 1000 + part
+    return value
+
+
+def artifact_url(relative_path: str) -> str:
+    if REPO_BASE_URL:
+        return f"{REPO_BASE_URL}/{relative_path}"
+    return relative_path
 
 
 def get_cargo_package_name(cargo_toml: Path) -> str:
@@ -130,6 +153,7 @@ for wasm_file in REPO_WASM_DIR.rglob("*.wasm"):
             
             # Construir URL relativa
             wasm_relative_path = wasm_file.relative_to(REPO_DIR).as_posix()
+            icon_relative_path = f"icon/{lang}.{wasm_name}.png"
             
             # Datos para index.json (formato simple y limpio)
             extension_data = {
@@ -138,12 +162,22 @@ for wasm_file in REPO_WASM_DIR.rglob("*.wasm"):
                 "name": metadata.get("name", wasm_name),
                 "lang": metadata.get("lang", lang),
                 "version": version,
+                "versionCode": metadata.get("versionCode", version_code(version)),
                 "nsfw": metadata.get("nsfw", False),
-                "url": f"https://raw.githubusercontent.com/Gekkoya/extensions/main/{wasm_relative_path}",
-                "icon": f"https://raw.githubusercontent.com/Gekkoya/extensions/main/icon/{lang}.{wasm_name}.png",
+                "url": artifact_url(wasm_relative_path),
+                "icon": artifact_url(icon_relative_path),
                 "sha256": sha256,
                 "size": size,
-                "baseUrl": metadata.get("baseUrl", "")
+                "contractVersion": metadata.get("contractVersion", 1),
+                "sourceVersionId": metadata.get("sourceVersionId", 1),
+                "supportsLatest": metadata.get("supportsLatest", False),
+                "permissions": metadata.get("permissions", [
+                    "Network",
+                    "Cookies",
+                    "WebViewChallenge",
+                    "TemporaryStorage",
+                    "Logs",
+                ]),
             }
             
             index_data.append(extension_data)

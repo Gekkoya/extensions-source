@@ -81,14 +81,20 @@ else:
 # Filtrar extensiones obsoletas del índice remoto
 index = [
     item for item in remote_index
-    if not any([f"{item['lang']}.{item['id']}" == module for module in to_delete])
+    if item.get("id") not in to_delete
 ]
 
-# Agregar nuevas extensiones
-index.extend(local_index)
+# Agregar nuevas extensiones, reemplazando entradas existentes por id
+by_id = {item.get("id"): item for item in index if item.get("id")}
+for item in local_index:
+    item_id = item.get("id")
+    if item_id:
+        by_id[item_id] = item
+
+index = list(by_id.values())
 
 # Ordenar por lang.id
-index.sort(key=lambda x: f"{x['lang']}.{x['id']}")
+index.sort(key=lambda x: x.get("id", ""))
 
 # Escribir index.json
 with open(REMOTE_REPO / "index.json", "w", encoding="utf-8") as f:

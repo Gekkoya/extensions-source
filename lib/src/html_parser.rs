@@ -3,7 +3,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// Extract text between two delimiters
-/// 
+///
 /// # Example
 /// ```
 /// let html = r#"<div>Hello</div>"#;
@@ -13,18 +13,18 @@ use alloc::vec::Vec;
 pub fn extract_between(text: &str, start: &str, end: &str) -> Option<String> {
     let start_idx = text.find(start)? + start.len();
     let remaining = &text[start_idx..];
-    
+
     if end.is_empty() {
         return Some(remaining.to_string());
     }
-    
+
     let end_idx = remaining.find(end)?;
     Some(remaining[..end_idx].to_string())
 }
 
 /// Extract HTML attribute value
 /// Handles both single and double quotes
-/// 
+///
 /// # Example
 /// ```
 /// let tag = r#"<img src="image.jpg" alt='test'>"#;
@@ -40,7 +40,7 @@ pub fn extract_attribute(tag: &str, attr_name: &str) -> Option<String> {
             return Some(after[..end].to_string());
         }
     }
-    
+
     // Try single quotes: attr='value'
     let pattern_single = alloc::format!("{}='", attr_name);
     if let Some(start) = tag.find(&pattern_single) {
@@ -49,15 +49,15 @@ pub fn extract_attribute(tag: &str, attr_name: &str) -> Option<String> {
             return Some(after[..end].to_string());
         }
     }
-    
+
     None
 }
 
 /// Clean HTML by removing tags and decoding entities
-/// 
+///
 /// This implementation uses a single-pass algorithm with O(n) complexity
 /// instead of repeatedly calling replace_range which would be O(n²).
-/// 
+///
 /// # Example
 /// ```
 /// let html = "<p>Hello &amp; <b>World</b></p>";
@@ -65,11 +65,10 @@ pub fn extract_attribute(tag: &str, attr_name: &str) -> Option<String> {
 /// ```
 pub fn clean_html(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
-    let mut chars = text.chars();
     let mut inside_tag = false;
-    
+
     // Single-pass algorithm: O(n) complexity
-    while let Some(ch) = chars.next() {
+    for ch in text.chars() {
         match ch {
             '<' => {
                 inside_tag = true;
@@ -85,7 +84,7 @@ pub fn clean_html(text: &str) -> String {
             }
         }
     }
-    
+
     // Decode HTML entities in a single pass
     // Using const strings to avoid allocations
     const ENTITIES: &[(&str, &str)] = &[
@@ -98,13 +97,13 @@ pub fn clean_html(text: &str) -> String {
         ("&#x27;", "'"),
         ("&apos;", "'"),
     ];
-    
+
     for (entity, replacement) in ENTITIES {
         if result.contains(entity) {
             result = result.replace(entity, replacement);
         }
     }
-    
+
     result.trim().to_string()
 }
 
@@ -129,7 +128,7 @@ pub fn extract_link_texts(text: &str) -> String {
 }
 
 /// Extract value from definition list (dt/dd pairs)
-/// 
+///
 /// # Example
 /// ```
 /// let html = "<dt>Author</dt><dd>John Doe</dd>";
@@ -139,7 +138,7 @@ pub fn extract_dl_value(body: &str, key: &str) -> Option<String> {
     let dt_tag = alloc::format!("<dt>{}</dt>", key);
     let start = body.find(&dt_tag)?;
     let remaining = &body[start + dt_tag.len()..];
-    
+
     extract_between(remaining, "<dd>", "</dd>")
         .map(|s| clean_html(&s))
         .filter(|s| !s.is_empty())
@@ -149,7 +148,7 @@ pub fn extract_dl_value(body: &str, key: &str) -> Option<String> {
 /// Tries to find patterns like "Chapter X", "Capítulo X", etc.
 pub fn extract_chapter_number(name: &str) -> f32 {
     let lower = name.to_lowercase();
-    
+
     // Try to find "capítulo", "capitulo", or "chapter"
     if let Some(cap_idx) = lower
         .find("capítulo")
@@ -159,7 +158,7 @@ pub fn extract_chapter_number(name: &str) -> f32 {
         let after = &name[cap_idx..];
         let mut num_str = String::new();
         let mut found_digit = false;
-        
+
         for ch in after.chars() {
             if ch.is_ascii_digit() || (ch == '.' && found_digit) {
                 num_str.push(ch);
@@ -168,16 +167,16 @@ pub fn extract_chapter_number(name: &str) -> f32 {
                 break;
             }
         }
-        
+
         if let Ok(num) = num_str.parse::<f32>() {
             return num;
         }
     }
-    
+
     // Try to find any number in the string
     let mut num_str = String::new();
     let mut found_digit = false;
-    
+
     for ch in name.chars() {
         if ch.is_ascii_digit() || (ch == '.' && found_digit) {
             num_str.push(ch);
@@ -186,14 +185,14 @@ pub fn extract_chapter_number(name: &str) -> f32 {
             break;
         }
     }
-    
+
     num_str.parse::<f32>().unwrap_or(-1.0)
 }
 
 /// URL encode a string
 pub fn url_encode(s: &str) -> String {
     let mut result = String::new();
-    
+
     for byte in s.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -208,7 +207,7 @@ pub fn url_encode(s: &str) -> String {
             }
         }
     }
-    
+
     result
 }
 
@@ -216,7 +215,7 @@ pub fn url_encode(s: &str) -> String {
 pub fn url_decode(s: &str) -> String {
     let mut result = String::new();
     let mut chars = s.chars().peekable();
-    
+
     while let Some(ch) = chars.next() {
         match ch {
             '%' => {
@@ -232,14 +231,14 @@ pub fn url_decode(s: &str) -> String {
             _ => result.push(ch),
         }
     }
-    
+
     result
 }
 
 /// Decode Base64 string
 pub fn decode_base64_string(encoded: &str) -> Option<String> {
     use base64::{engine::general_purpose, Engine as _};
-    
+
     let decoded = general_purpose::STANDARD.decode(encoded).ok()?;
     String::from_utf8(decoded).ok()
 }
@@ -248,7 +247,7 @@ pub fn decode_base64_string(encoded: &str) -> Option<String> {
 pub fn unescape_java(s: &str) -> String {
     let mut result = String::new();
     let mut chars = s.chars();
-    
+
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             if let Some(next) = chars.next() {
@@ -288,7 +287,7 @@ pub fn unescape_java(s: &str) -> String {
             result.push(ch);
         }
     }
-    
+
     result
 }
 
@@ -296,7 +295,7 @@ pub fn unescape_java(s: &str) -> String {
 pub fn unescape_backslashes(s: &str) -> String {
     let mut result = String::new();
     let mut chars = s.chars();
-    
+
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             if let Some(next) = chars.next() {
@@ -308,7 +307,7 @@ pub fn unescape_backslashes(s: &str) -> String {
             result.push(ch);
         }
     }
-    
+
     result
 }
 

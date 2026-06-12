@@ -2,5 +2,14 @@
   "name": "Mangas.in",
   "lang": "es",
   "nsfw": true,
-  "baseUrl": "https://m440.in"
+  "contractVersion": 1,
+  "sourceVersionId": 1,
+  "supportsLatest": true,
+  "permissions": [
+    "Network",
+    "Cookies",
+    "WebViewChallenge",
+    "TemporaryStorage",
+    "Logs"
+  ]
 }

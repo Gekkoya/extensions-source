@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gekkoya-core = { path = "../../../core" }
-gekkoya-lib = { path = "../../../lib" }
+gekkoya-lib = { path = "../../../lib", features = ["deobfuscator"] }
 mmrcms = { path = "../../../lib-multisrc/mmrcms" }
 wit-bindgen = { workspace = true }
 serde = { workspace = true }

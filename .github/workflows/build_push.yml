@@ -137,7 +137,7 @@ jobs:
   publish:
     name: Publish extensions repository
     needs: [prepare, build]
-    if: "github.repository == 'Gekkoya/extensions-source'"
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -166,6 +166,8 @@ jobs:
           persist-credentials: false
 
       - name: Create repository artifacts
+        env:
+          REPO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository_owner }}/extensions/main
         run: |
           cd main
           mkdir -p repo
@@ -175,7 +177,7 @@ jobs:
       - name: Checkout extensions repository
         uses: actions/checkout@v6
         with:
-          repository: Gekkoya/extensions
+          repository: ${{ github.repository_owner }}/extensions
           token: ${{ secrets.BOT_PAT }}
           ref: main
           path: repo

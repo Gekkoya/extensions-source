@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use gekkoya_lib::crypto::*;
+use gekkoya_lib::deobfuscator::{deobfuscate_script as deobfuscate_js_script, extract_variable};
 use gekkoya_lib::html_parser::*;
 use mmrcms::{MMRCMSConfig, MMRCMS};
 use serde::Deserialize;
@@ -72,7 +73,9 @@ fn convert_filter(filter: mmrcms::Filter) -> types::Filter {
         filter_type: filter.filter_type,
         name: filter.name,
         key: filter.key,
-        options: filter.options.map(|opts| opts.into_iter().map(convert_filter_option).collect()),
+        options: filter
+            .options
+            .map(|opts| opts.into_iter().map(convert_filter_option).collect()),
     }
 }
 
@@ -112,8 +115,8 @@ struct LatestUpdateResponse {
 /// Search suggestion from API
 #[derive(Deserialize)]
 struct SuggestionDto {
-    value: String,  // Title
-    data: String,   // Slug
+    value: String, // Title
+    data: String,  // Slug
 }
 
 /// MangasIn extension implementation
@@ -130,7 +133,7 @@ impl MangasIn {
     fn new() -> Self {
         let base_url = "https://m440.in".to_string();
         let config = MMRCMSConfig::new(base_url.clone(), mmrcms::Language::Spanish);
-        
+
         Self {
             mmrcms: MMRCMS::new(config),
             base_url,
@@ -142,8 +145,8 @@ impl MangasIn {
     /// Parse latest updates JSON response
     /// Implements deduplication like Kotlin version
     fn parse_latest_json(&self, body: &str, page: u32) -> Result<types::MangaPage, String> {
-        let response: LatestUpdateResponse = serde_json::from_str(body)
-            .map_err(|_| "Failed to parse latest JSON".to_string())?;
+        let response: LatestUpdateResponse =
+            serde_json::from_str(body).map_err(|_| "Failed to parse latest JSON".to_string())?;
 
         // Clear cache on page 1 (like Kotlin)
         if page == 1 {
@@ -155,14 +158,14 @@ impl MangasIn {
             .into_iter()
             .filter_map(|item| {
                 let url = format!("/manga/{}", item.slug);
-                
+
                 // Deduplication: skip if already seen
                 let mut cache = self.latest_titles.borrow_mut();
                 if cache.contains(&url) {
                     return None;
                 }
                 cache.insert(url.clone());
-                
+
                 Some(types::Manga {
                     url: url.clone(),
                     title: item.name,
@@ -185,17 +188,17 @@ impl MangasIn {
             has_next_page,
         })
     }
-    
+
     /// Parse search suggestions from JSON response
     fn parse_search_json(&self, body: &str, page: u32) -> Result<types::MangaPage, String> {
-        let suggestions: Vec<SuggestionDto> = serde_json::from_str(body)
-            .map_err(|_| "Failed to parse search JSON".to_string())?;
-        
+        let suggestions: Vec<SuggestionDto> =
+            serde_json::from_str(body).map_err(|_| "Failed to parse search JSON".to_string())?;
+
         // Paginate like Kotlin: 24 items per page
         let start = ((page - 1) * 24) as usize;
         let end = (page * 24) as usize;
         let total = suggestions.len();
-        
+
         let mangas: Vec<types::Manga> = suggestions
             .into_iter()
             .skip(start)
@@ -216,9 +219,9 @@ impl MangasIn {
                 }
             })
             .collect();
-        
+
         let has_next_page = end < total;
-        
+
         Ok(types::MangaPage {
             mangas,
             has_next_page,
@@ -231,9 +234,12 @@ impl MangasIn {
             .trim_start_matches("/manga/")
             .trim_end_matches('/');
 
-        format!("{}/uploads/manga/{}/cover/cover_250x350.jpg", self.base_url, slug)
+        format!(
+            "{}/uploads/manga/{}/cover/cover_250x350.jpg",
+            self.base_url, slug
+        )
     }
-    
+
     /// Parse status from manga details HTML
     /// EXACTLY like Kotlin: div.manga-name span.label
     fn parse_status(&self, body: &str) -> mmrcms::MangaStatus {
@@ -246,83 +252,79 @@ impl MangasIn {
                     let content = &label_section[content_start + 1..];
                     if let Some(content_end) = content.find("</span>") {
                         let status_text = content[..content_end].to_lowercase();
-                        
+
                         // Match Kotlin's detailStatusComplete, detailStatusOngoing, detailStatusDropped
-                        if status_text.contains("complete") || status_text.contains("completo") || status_text.contains("completado") {
+                        if status_text.contains("complete")
+                            || status_text.contains("completo")
+                            || status_text.contains("completado")
+                        {
                             return mmrcms::MangaStatus::Completed;
-                        } else if status_text.contains("ongoing") || status_text.contains("en curso") || status_text.contains("activo") || status_text.contains("publicándose") {
+                        } else if status_text.contains("ongoing")
+                            || status_text.contains("en curso")
+                            || status_text.contains("activo")
+                            || status_text.contains("publicándose")
+                        {
                             return mmrcms::MangaStatus::Ongoing;
-                        } else if status_text.contains("dropped") || status_text.contains("cancelado") || status_text.contains("abandonado") {
+                        } else if status_text.contains("dropped")
+                            || status_text.contains("cancelado")
+                            || status_text.contains("abandonado")
+                        {
                             return mmrcms::MangaStatus::Cancelled;
                         }
                     }
                 }
             }
         }
-        
+
         mmrcms::MangaStatus::Unknown
     }
 
     /// Get AES key by fetching and deobfuscating ads2.js
-    /// Uses host-provided tools to fetch and evaluate JavaScript
     /// Caches the key after first fetch (like Kotlin with retry logic)
     fn get_aes_key(&self) -> Result<String, String> {
         // Return cached key if available
         if let Some(ref key) = *self.cached_aes_key.borrow() {
             return Ok(key.clone());
         }
-        
+
         // 1. Fetch the JavaScript file using host tools
         let script_url = format!("{}/js/ads2.js", self.base_url);
-        
+
         let request = host_tools::HttpRequest {
             url: script_url,
             method: "GET".to_string(),
-            headers: vec![
-                ("Referer".to_string(), format!("{}/", self.base_url)),
-            ],
+            headers: vec![("Referer".to_string(), format!("{}/", self.base_url))],
             body: None,
             rate_limit_millis: Some(1000), // 1 request per second
         };
-        
+
         let response = host_tools::fetch(&request)?;
-        
+
         if response.status != 200 {
             return Err(format!("HTTP error: {}", response.status));
         }
-        
+
         let script = response.body;
-        
-        // 2. Deobfuscate and extract key using host's JavaScript engine
-        // This matches Kotlin's Deobfuscator.deobfuscateScript() + regex extraction
-        let deobfuscate_script = format!(
-            r#"
-            (function() {{
-                const script = `{}`;
-                
-                // Try to deobfuscate if Deobfuscator is available (like Synchrony)
-                let deobfuscated = script;
-                if (typeof Deobfuscator !== 'undefined') {{
-                    try {{
-                        const deob = new Deobfuscator();
-                        deobfuscated = deob.deobfuscateSource(script) || script;
-                    }} catch (e) {{
-                        // Fallback to original script
-                    }}
-                }}
-                
+
+        // Extract the key inside the extension. The app remains a generic host.
+        // This matches the original deobfuscateScript + KEY_REGEX behavior.
+        let deobfuscate_script = deobfuscate_js_script(&script)
+            .map_err(|_| "No se pudo desofuscar el script".to_string())?;
+        let key = extract_decrypt_key(&deobfuscate_script)?;
+
+        /*
                 // Extract key using Kotlin's KEY_REGEX: decrypt\(.*?,\s*(.*?)\s*,.*\)
                 const keyRegex = /decrypt\(.*?,\s*(.*?)\s*,.*\)/;
                 const match = deobfuscated.match(keyRegex);
-                
+
                 if (!match) throw new Error('No se pudo encontrar la clave');
-                
+
                 const variable = match[1];
-                
+
                 // If it's a string literal, return it
                 if (variable.startsWith("'")) return variable.slice(1, -1);
                 if (variable.startsWith('"')) return variable.slice(1, -1);
-                
+
                 // Find the variable definition: (?:let|var|const)\s+variable\s*=\s*['"](.*)['"]
                 const varRegex = new RegExp(`(?:let|var|const)\\\\s+${{variable}}\\\\s*=\\\\s*['"](.*)['"]`);
                 const varMatch = deobfuscated.match(varRegex);
@@ -332,13 +334,15 @@ impl MangasIn {
             "#,
             script.replace('`', r"\`").replace('\\', r"\\")
         );
-        
-        // 3. Evaluate the script to get the key
-        let key = host_tools::evaluate_js(&deobfuscate_script)?;
-        
+
+        // 3. Extract the key inside the extension. The app remains a generic host.
+        let deobfuscate_script = deobfuscate_js_script(&script).unwrap_or_else(|_| script.clone());
+        let key = extract_decrypt_key(&deobfuscate_script)?;
+        */
+
         // 4. Cache the key
         *self.cached_aes_key.borrow_mut() = Some(key.clone());
-        
+
         Ok(key)
     }
 
@@ -372,7 +376,7 @@ impl MangasIn {
         let mut full_ciphertext = Vec::new();
         full_ciphertext.extend_from_slice(salted_prefix);
         full_ciphertext.extend_from_slice(&salt);
-        
+
         // Decode base64 ciphertext
         use base64::{engine::general_purpose, Engine as _};
         let ct_bytes = general_purpose::STANDARD
@@ -402,7 +406,7 @@ impl MangasIn {
             .into_iter()
             .map(|ch| {
                 let chapter_number = ch.number.parse::<f32>().unwrap_or(-1.0);
-                
+
                 // Match Kotlin's name logic
                 let name = if ch.name == format!("Capítulo {}", ch.number) {
                     ch.name
@@ -524,14 +528,133 @@ fn parse_date(date_str: &str) -> i64 {
     let days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut days = (year - 1970) * 365;
     days += (year - 1969) / 4;
-    
+
     for &month_days in days_in_month.iter().take((month - 1) as usize) {
         days += month_days;
     }
     days += day - 1;
 
-    let total_seconds = (days as i64) * 86400 + (hour as i64) * 3600 + (minute as i64) * 60 + (second as i64);
+    let total_seconds =
+        (days as i64) * 86400 + (hour as i64) * 3600 + (minute as i64) * 60 + (second as i64);
     total_seconds * 1000
+}
+
+fn extract_decrypt_key(script: &str) -> Result<String, String> {
+    let expression = extract_decrypt_key_expression(script)
+        .ok_or("No se pudo encontrar la clave".to_string())?;
+    let expression = expression.trim();
+
+    if let Some(value) = extract_string_literal(expression) {
+        return Ok(value);
+    }
+
+    let variable = expression
+        .trim_start_matches("var ")
+        .trim_start_matches("let ")
+        .trim_start_matches("const ")
+        .trim();
+    extract_variable(script, variable).map_err(|_| "No se pudo encontrar la clave".to_string())
+}
+
+fn extract_decrypt_key_expression(script: &str) -> Option<String> {
+    let call_start = script.find("decrypt(")?;
+    let args_start = call_start + "decrypt(".len();
+    let args_end = find_matching_paren(script, args_start)?;
+    let args = split_top_level_args(&script[args_start..args_end]);
+    args.get(1).cloned()
+}
+
+fn find_matching_paren(script: &str, start: usize) -> Option<usize> {
+    let mut depth = 1;
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (offset, ch) in script[start..].char_indices() {
+        if let Some(quote_char) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote_char {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(start + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn split_top_level_args(args: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current_start = 0;
+    let mut depth = 0;
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, ch) in args.char_indices() {
+        if let Some(quote_char) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote_char {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                result.push(args[current_start..index].trim().to_string());
+                current_start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    result.push(args[current_start..].trim().to_string());
+    result
+}
+
+fn extract_string_literal(expression: &str) -> Option<String> {
+    let mut chars = expression.chars();
+    let quote = chars.next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in chars {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == quote {
+            return Some(value);
+        } else {
+            value.push(ch);
+        }
+    }
+
+    None
 }
 
 /// Implement the WIT interface
@@ -550,9 +673,8 @@ impl Guest for Component {
 
     fn get_popular(_page: u32, body: String) -> Result<types::MangaPage, String> {
         let ext = MangasIn::new();
-        let result = ext.mmrcms.parse_popular(&body)
-            .map_err(|e| e.to_string())?;
-        
+        let result = ext.mmrcms.parse_popular(&body).map_err(|e| e.to_string())?;
+
         Ok(types::MangaPage {
             mangas: result.mangas.into_iter().map(convert_manga).collect(),
             has_next_page: result.has_next_page,
@@ -561,17 +683,16 @@ impl Guest for Component {
 
     fn get_latest(page: u32, body: String) -> Result<types::MangaPage, String> {
         let ext = MangasIn::new();
-        
+
         let trimmed = body.trim_start();
         let first_char = trimmed.chars().next().unwrap_or(' ');
-        
+
         if first_char == '{' {
             // JSON response from /lasted endpoint
             ext.parse_latest_json(&body, page)
         } else {
             // HTML response (fallback)
-            let result = ext.mmrcms.parse_latest(&body)
-                .map_err(|e| e.to_string())?;
+            let result = ext.mmrcms.parse_latest(&body).map_err(|e| e.to_string())?;
             Ok(types::MangaPage {
                 mangas: result.mangas.into_iter().map(convert_manga).collect(),
                 has_next_page: result.has_next_page,
@@ -581,18 +702,17 @@ impl Guest for Component {
 
     fn search(_query: String, page: u32, body: String) -> Result<types::MangaPage, String> {
         let ext = MangasIn::new();
-        
+
         // Detect response type (JSON vs HTML)
         let trimmed = body.trim_start();
         let first_char = trimmed.chars().next().unwrap_or(' ');
-        
+
         if first_char == '[' {
             // JSON array response from /search endpoint (suggestions)
             ext.parse_search_json(&body, page)
         } else {
             // HTML response from /filterList or /advanced-search
-            let result = ext.mmrcms.parse_search(&body)
-                .map_err(|e| e.to_string())?;
+            let result = ext.mmrcms.parse_search(&body).map_err(|e| e.to_string())?;
             Ok(types::MangaPage {
                 mangas: result.mangas.into_iter().map(convert_manga).collect(),
                 has_next_page: result.has_next_page,
@@ -602,33 +722,41 @@ impl Guest for Component {
 
     fn get_manga_details(body: String) -> Result<types::Manga, String> {
         let ext = MangasIn::new();
-        
+
         // Extract URL from HTML
         let url = extract_between(&body, "<link rel=\"canonical\" href=\"", "\"")
             .or_else(|| extract_between(&body, "<meta property=\"og:url\" content=\"", "\""))
-            .and_then(|full_url| full_url.find("/manga/").map(|start| full_url[start..].to_string()))
+            .and_then(|full_url| {
+                full_url
+                    .find("/manga/")
+                    .map(|start| full_url[start..].to_string())
+            })
             .unwrap_or_else(|| "/manga/unknown".to_string());
-        
+
         // Get base details from MMRCMS
-        let mut result = ext.mmrcms.parse_manga_details(&body, &url)
+        let mut result = ext
+            .mmrcms
+            .parse_manga_details(&body, &url)
             .map_err(|e| e.to_string())?;
-        
+
         // Override status with MangasIn-specific selector (like Kotlin)
         result.status = ext.parse_status(&body);
-        
+
         Ok(convert_manga(result))
     }
 
     fn get_chapter_list(body: String, manga_url: String) -> Result<types::ChapterList, String> {
         let ext = MangasIn::new();
-        
+
         // Check if body contains encrypted chapter data (like Kotlin)
         if body.contains(r#""ct":"#) {
             // Encrypted chapters - use host tools to get key and decrypt
             ext.parse_encrypted_chapters(&body, &manga_url)
         } else {
             // Regular HTML parsing
-            let result = ext.mmrcms.parse_chapter_list(&body, &manga_url)
+            let result = ext
+                .mmrcms
+                .parse_chapter_list(&body, &manga_url)
                 .map_err(|e| e.to_string())?;
             Ok(types::ChapterList {
                 chapters: result.chapters.into_iter().map(convert_chapter).collect(),
@@ -644,7 +772,7 @@ impl Guest for Component {
     fn get_filters() -> Result<types::FilterList, String> {
         let ext = MangasIn::new();
         let result = ext.mmrcms.get_filters();
-        
+
         Ok(types::FilterList {
             filters: result.filters.into_iter().map(convert_filter).collect(),
         })
@@ -652,7 +780,7 @@ impl Guest for Component {
 
     fn build_url(operation: String, params: String) -> Result<String, String> {
         let ext = MangasIn::new();
-        
+
         match operation.as_str() {
             "popular" => {
                 let page: u32 = params.parse().unwrap_or(1);
@@ -668,14 +796,18 @@ impl Guest for Component {
                     query: String,
                     page: u32,
                 }
-                
+
                 let search_params: SearchParams = serde_json::from_str(&params)
                     .map_err(|_| "Invalid search params".to_string())?;
-                
+
                 if search_params.query.is_empty() {
                     Ok(ext.mmrcms.build_popular_url(search_params.page))
                 } else {
-                    Ok(format!("{}/search?q={}", ext.base_url, url_encode(&search_params.query)))
+                    Ok(format!(
+                        "{}/search?q={}",
+                        ext.base_url,
+                        url_encode(&search_params.query)
+                    ))
                 }
             }
             "manga" => Ok(ext.mmrcms.build_manga_url(&params)),
