@@ -1,6 +1,7 @@
 {
   "name": "Mangas.in",
   "lang": "es",
+  "baseUrl": "https://m440.in",
   "nsfw": true,
   "contractVersion": 1,
   "sourceVersionId": 1,

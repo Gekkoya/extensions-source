@@ -185,4 +185,4 @@ with open(REMOTE_REPO / "index.html", "w", encoding="utf-8") as f:
 
 print(f"✓ Created index.html")
 
-print("\n✅ Merge completed successfully!")
+print("\n✓ Merge completed successfully!")

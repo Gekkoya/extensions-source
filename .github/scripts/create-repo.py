@@ -154,6 +154,7 @@ for wasm_file in REPO_WASM_DIR.rglob("*.wasm"):
             # Construir URL relativa
             wasm_relative_path = wasm_file.relative_to(REPO_DIR).as_posix()
             icon_relative_path = f"icon/{lang}.{wasm_name}.png"
+            icon_file = REPO_ICON_DIR / f"{lang}.{wasm_name}.png"
             
             # Datos para index.json (formato simple y limpio)
             extension_data = {
@@ -161,11 +162,11 @@ for wasm_file in REPO_WASM_DIR.rglob("*.wasm"):
                 "sourceId": source_id,
                 "name": metadata.get("name", wasm_name),
                 "lang": metadata.get("lang", lang),
+                "baseUrl": metadata.get("baseUrl", metadata.get("base_url", "")),
                 "version": version,
                 "versionCode": metadata.get("versionCode", version_code(version)),
                 "nsfw": metadata.get("nsfw", False),
                 "url": artifact_url(wasm_relative_path),
-                "icon": artifact_url(icon_relative_path),
                 "sha256": sha256,
                 "size": size,
                 "contractVersion": metadata.get("contractVersion", 1),
@@ -179,6 +180,8 @@ for wasm_file in REPO_WASM_DIR.rglob("*.wasm"):
                     "Logs",
                 ]),
             }
+            if icon_file.exists():
+                extension_data["icon"] = artifact_url(icon_relative_path)
             
             index_data.append(extension_data)
             
@@ -283,4 +286,4 @@ with open(REPO_DIR / "index.html", "w", encoding="utf-8") as f:
 
 print(f"✓ Created index.html")
 
-print("\n✅ Repository index created successfully!")
+print("\n✓ Repository index created successfully!")
